@@ -195,7 +195,33 @@ int ThermalCommon::readFromFile(std::string_view path, std::string& out)
 	return readLineFromFile(path, out);
 }
 
-static int get_tzn(std::string sensor_name)
+/*
+ * Compare the first sensor_name.length() characters of a thermal zone type.
+ * With relaxed set, '-' and '_' are treated as the same character.
+ */
+static bool tz_name_match(const std::string& tz_type,
+		const std::string& sensor_name, bool relaxed)
+{
+	if (tz_type.length() < sensor_name.length())
+		return false;
+
+	for (size_t i = 0; i < sensor_name.length(); i++) {
+		char a = tz_type[i], b = sensor_name[i];
+
+		if (relaxed) {
+			if (a == '_')
+				a = '-';
+			if (b == '_')
+				b = '-';
+		}
+		if (a != b)
+			return false;
+	}
+
+	return true;
+}
+
+static int find_tzn(const std::string& sensor_name, bool relaxed)
 {
 	DIR *tdir = NULL;
 	struct dirent *tdirent = NULL;
@@ -236,8 +262,7 @@ static int get_tzn(std::string sensor_name)
 				tdirent->d_name << std::endl;
 			continue;
 		}
-		if (!strncmp(buf.c_str(), sensor_name.c_str(),
-					sensor_name.length())) {
+		if (tz_name_match(buf, sensor_name, relaxed)) {
 			found = 1;
 			break;
 		}
@@ -257,6 +282,25 @@ static int get_tzn(std::string sensor_name)
 	ret = chdir(cwd);
 
 	return found;
+}
+
+static int get_tzn(std::string sensor_name)
+{
+	int tzn = find_tzn(sensor_name, false);
+
+	/*
+	 * Some OEM device trees rename zones with '_' instead of '-',
+	 * e.g. Motorola's quiet_therm for quiet-therm. Fall back to a
+	 * separator-insensitive match only when no exact match exists.
+	 */
+	if (tzn < 0) {
+		tzn = find_tzn(sensor_name, true);
+		if (tzn >= 0)
+			LOG(INFO) << "Sensor: " << sensor_name <<
+				" matched by alternate name at tz: " << tzn << std::endl;
+	}
+
+	return tzn;
 }
 
 int ThermalCommon::initialize_sensor(struct target_therm_cfg& cfg, int sens_idx)
